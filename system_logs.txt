@@ -155,3 +155,4 @@ Information	11-03-2026 18:38:23	Netwtw10	7025	None	7025 - Dump after return from
 Information	11-03-2026 18:38:23	Microsoft-Windows-Kernel-Power	566	(268)	"The system session has transitioned from 29 to 30.
 
 Reason SxTransition 
+

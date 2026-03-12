@@ -1,2 +1,7 @@
 
 pip install -r requirements.txt
+Configure Dynatrace API Token:
+Set environment variable:
+export DYNATRACE_API_TOKEN="your_token"
+to check:
+echo $DYNATRACE_API_TOKEN

@@ -1,100 +1,167 @@
+#!/usr/bin/env python3
+
+import re
+import sys
 import pandas as pd
-import numpy as np
 from sklearn.ensemble import IsolationForest
-from tabulate import tabulate
-from datetime import datetime
 import matplotlib.pyplot as plt
-from colorama import Fore, Style
+from colorama import Fore, Style, init
 
-# ------------------------------
-# 1️⃣ Read and Parse Logs
-# ------------------------------
-log_file_path = "system_logs.txt"  # Update with your log file path
+init(autoreset=True)
 
-try:
-    with open(log_file_path, "r") as file:
-        logs = file.readlines()
-except FileNotFoundError:
-    print(Fore.RED + f"❌ Log file not found: {log_file_path}" + Style.RESET_ALL)
-    exit()
+LOG_FILE = "system_logs.txt"
 
-data = []
-for log in logs:
-    parts = log.strip().split(" ", 3)
-    if len(parts) < 4:
-        continue
-    timestamp = parts[0] + " " + parts[1]
-    level = parts[2]
-    message = parts[3]
-    data.append([timestamp, level, message])
 
-df = pd.DataFrame(data, columns=["timestamp", "level", "message"])
-df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-df.dropna(subset=["timestamp"], inplace=True)
+# ---------------------------------------------------
+# Parse Log File
+# ---------------------------------------------------
+def parse_logs(log_file):
+    log_pattern = re.compile(
+        r'^(?P<timestamp>\S+ \S+) (?P<level>\w+) (?P<message>.*)$'
+    )
 
-# ------------------------------
-# 2️⃣ Feature Engineering
-# ------------------------------
-level_mapping = {"INFO": 1, "WARNING": 2, "ERROR": 3, "CRITICAL": 4}
-df["level_score"] = df["level"].map(level_mapping).fillna(0)
-df["message_length"] = df["message"].apply(len)
+    data = []
 
-# Simple severity scoring based on message content
-def detect_severity(msg):
-    msg_lower = msg.lower()
-    if any(word in msg_lower for word in ["failed", "error", "critical", "panic"]):
-        return 4
-    elif any(word in msg_lower for word in ["warning", "slow", "timeout"]):
-        return 3
-    else:
-        return 1
+    try:
+        with open(log_file, "r") as f:
+            for line in f:
+                match = log_pattern.match(line.strip())
+                if match:
+                    data.append(match.groupdict())
+    except FileNotFoundError:
+        print(Fore.RED + f"Log file not found: {log_file}")
+        sys.exit(1)
 
-df["severity_score"] = df["message"].apply(detect_severity)
+    df = pd.DataFrame(data)
 
-# ------------------------------
-# 3️⃣ AI Model - Isolation Forest
-# ------------------------------
-model = IsolationForest(contamination=0.08, random_state=42)
-df["anomaly"] = model.fit_predict(df[["level_score", "message_length", "severity_score"]])
-df["is_anomaly"] = df["anomaly"].apply(lambda x: "❌ Anomaly" if x == -1 else "✅ Normal")
+    if df.empty:
+        print(Fore.RED + "No logs found.")
+        sys.exit(1)
 
-# ------------------------------
-# 4️⃣ Display Results
-# ------------------------------
-anomalies = df[df["is_anomaly"] == "❌ Anomaly"]
+    return df
 
-print(Fore.CYAN + "\n🔍 Detected Log Anomalies:\n" + Style.RESET_ALL)
-print(tabulate(
-    anomalies[["timestamp", "level", "message", "severity_score", "message_length", "is_anomaly"]],
-    headers="keys",
-    tablefmt="psql",
-    showindex=False
-))
 
-# ------------------------------
-# 5️⃣ Save & Visualize
-# ------------------------------
-# Save anomalies to CSV
-csv_file = f"anomalies_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-anomalies.to_csv(csv_file, index=False)
-print(Fore.YELLOW + f"\n📁 Anomalies report saved as: {csv_file}" + Style.RESET_ALL)
+# ---------------------------------------------------
+# Feature Engineering
+# ---------------------------------------------------
+def prepare_features(df):
 
-# Generate error frequency chart
-plt.figure(figsize=(8, 4))
-df["level"].value_counts().plot(kind="bar", color=["green", "orange", "red", "purple"])
-plt.title("Log Level Frequency")
-plt.xlabel("Log Level")
-plt.ylabel("Count")
-plt.tight_layout()
-chart_file = "log_level_frequency.png"
-plt.savefig(chart_file)
-print(Fore.GREEN + f"📊 Chart saved as: {chart_file}" + Style.RESET_ALL)
+    df["timestamp"] = pd.to_datetime(
+        df["timestamp"],
+        format="%Y-%m-%d %H:%M:%S",
+        errors="coerce"
+    )
 
-# ------------------------------
-# 6️⃣ Summary
-# ------------------------------
-print(Fore.MAGENTA + "\n📈 Summary Report" + Style.RESET_ALL)
-print(f"Total Logs: {len(df)}")
-print(f"Detected Anomalies: {len(anomalies)}")
-print(f"Normal Logs: {len(df) - len(anomalies)}")
-print(Fore.CYAN + "\n✅ Analysis complete!" + Style.RESET_ALL)
+    df = df.dropna(subset=["timestamp"])
+
+    # Message length
+    df["message_length"] = df["message"].astype(str).apply(len)
+
+    # Log level scoring
+    level_map = {
+        "INFO": 1,
+        "WARNING": 2,
+        "ERROR": 3,
+        "CRITICAL": 4
+    }
+
+    df["level_score"] = df["level"].map(level_map)
+    df["severity_score"] = df["level"].map(level_map)
+
+    features = ["level_score", "message_length", "severity_score"]
+
+    df = df.dropna(subset=features)
+
+    return df, features
+
+
+# ---------------------------------------------------
+# Run Isolation Forest
+# ---------------------------------------------------
+def detect_anomalies(df, features):
+
+    if df.shape[0] == 0:
+        print(Fore.RED + "No valid data available for anomaly detection.")
+        sys.exit(1)
+
+    print(Fore.CYAN + "Training IsolationForest model...")
+
+    model = IsolationForest(
+        contamination=0.05,
+        random_state=42
+    )
+
+    df["anomaly"] = model.fit_predict(df[features])
+
+    return df
+
+
+# ---------------------------------------------------
+# Save Results
+# ---------------------------------------------------
+def save_results(df):
+
+    anomalies = df[df["anomaly"] == -1]
+    error_logs = df[df["level"].isin(["ERROR", "CRITICAL"])]
+
+    df.to_csv("aiops_analyzed_logs.csv", index=False)
+    anomalies.to_csv("aiops_anomaly_logs.csv", index=False)
+    error_logs.to_csv("aiops_error_logs.csv", index=False)
+
+    print(Fore.GREEN + "\nFiles Generated:")
+    print("aiops_analyzed_logs.csv")
+    print("aiops_anomaly_logs.csv")
+    print("aiops_error_logs.csv")
+
+    return anomalies
+
+
+# ---------------------------------------------------
+# Visualization
+# ---------------------------------------------------
+def visualize_logs(df):
+
+    level_counts = df["level"].value_counts()
+
+    plt.figure(figsize=(8, 5))
+    level_counts.plot(kind="bar")
+
+    plt.title("Log Level Distribution")
+    plt.xlabel("Log Level")
+    plt.ylabel("Count")
+
+    plt.tight_layout()
+    plt.savefig("log_distribution.png")
+
+    print(Fore.YELLOW + "Log distribution chart saved: log_distribution.png")
+
+
+# ---------------------------------------------------
+# Main
+# ---------------------------------------------------
+def main():
+
+    print(Fore.CYAN + "\nStarting AIOps Log Analysis...\n")
+
+    df = parse_logs(LOG_FILE)
+
+    print(Fore.BLUE + f"Logs loaded: {df.shape}")
+
+    df, features = prepare_features(df)
+
+    print(Fore.BLUE + f"Dataset after cleaning: {df.shape}")
+
+    df = detect_anomalies(df, features)
+
+    anomalies = save_results(df)
+
+    print(Fore.MAGENTA + "\nSample Anomalies:")
+    print(anomalies[["timestamp", "level", "message"]].head())
+
+    visualize_logs(df)
+
+    print(Fore.GREEN + "\nAnalysis completed.\n")
+
+
+if __name__ == "__main__":
+    main()

@@ -6,6 +6,11 @@ import pandas as pd
 from sklearn.ensemble import IsolationForest
 import matplotlib.pyplot as plt
 from colorama import Fore, Style, init
+import os
+
+print("Fetching Dynatrace AI problems...")
+
+os.system("python dynatrace_problems_fetch.py")
 
 init(autoreset=True)
 
